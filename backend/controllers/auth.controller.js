@@ -1,133 +1,122 @@
-import { User } from "../models/user.model.js";
-import bcryptjs from "bcryptjs";
-import { generateTokenandsetcookie } from "../utils/generateToken.js";
+import User from "../models/user.model.js";
+import jwt from "jsonwebtoken";
+import bcrypt from "bcryptjs";
 
-// Hàm validate đầu vào
-const validateSignupInput = ({ username, email, password }) => {
-  const errors = [];
-  // Kiểm tra rỗng
-  
+let refreshTokens = []; // khi co database thi dung redis
 
-  if (!username || !email || !password) {
-    errors.push("All fields are required");
-  }
+const authController = {
+    // REGISTER
+    registerUser: async (req, res) => {
+        try {
+            const salt = await bcrypt.genSalt(10);
+            const hashed = await bcrypt.hash(req.body.password, salt);
 
-  // Kiểm tra định dạng email
-  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-  if (email && !emailRegex.test(email)) {
-    errors.push("Invalid email format");
-  }
+            // Create new user
+            const newUser = new User({
+                username: req.body.username,
+                email: req.body.email,
+                password: hashed,
+            });
 
-  // Kiểm tra độ dài mật khẩu
-  if (password && password.length < 6) {
-    errors.push("Password must be at least 6 characters");
-  }
+            // Save user to DB
+            const user = await newUser.save();
+            res.status(200).json(user);
+        } catch (err) {
+            res.status(500).json(err);
+        }
+    },
+    //tao access token
+    generateAccessToken: (user) => {
+        return jwt.sign(
+            {
+                id: user.id,
+                admin: user.admin,
+            },
+            process.env.JWT_ACCESS_KEY,
+            { expiresIn: "60s" }
+        );
+    },
+    //tao refresh token
+    generateRefreshToken: (user) => {
+        return jwt.sign(
+            {
+                id: user.id,
+                admin: user.admin,
+            },
+            process.env.JWT_REFRESH_KEY,
+            { expiresIn: "365d" }
+        );
+    },
+    // LOGIN
+    loginUser: async (req, res) => {
+        try {
+            // Tìm người dùng qua username
+            const user = await User.findOne({ username: req.body.username });
+            if (!user) {
+                return res.status(404).json({ message: "Wrong username!" });
+            }
 
-  return errors;
+            // Kiểm tra mật khẩu
+            const validPassword = await bcrypt.compare(req.body.password, user.password);
+            if (!validPassword) {
+                return res.status(404).json({ message: "Wrong password!" });
+            }
+
+
+            if (user && validPassword) {
+                const accessToken = authController.generateAccessToken(user);
+                const refreshToken = authController.generateRefreshToken(user);
+                refreshTokens.push(refreshToken);// redis
+                res.cookie("refreshToken", refreshToken, {
+                    httpOnly: true,
+                    secure: false, // khi nao https thi mo true
+                    path: "/",
+                    sameSite: "strict",
+                })
+                const { password, ...others } = user._doc;
+                res.status(200).json({ ...others, accessToken });
+            }
+
+
+        } catch (err) {
+            res.status(500).json({ message: err.message });
+        }
+    },
+
+    requestRefreshToken: async (req, res) => {
+        // Take refresh token from user
+        const refreshToken = req.cookies.refreshToken;
+        if (!refreshToken) return res.status(401).json("You're not authenticated");
+        if (!refreshTokens.includes(refreshToken)) {
+            return res.status(403).json("Refresh token is not valid");
+        }
+        jwt.verify(refreshToken, process.env.JWT_REFRESH_KEY, (err, user) => {
+            if (err) {
+                console.log(err);
+            }
+            refreshTokens = refreshTokens.filter((token) => token !== refreshToken);
+            // Create new access token and refresh token
+            const newAccessToken = authController.generateAccessToken(user);
+            const newRefreshToken = authController.generateRefreshToken(user);
+            refreshTokens.push(newRefreshToken);
+            // Set new refresh token in cookies
+            res.cookie("refreshToken", newRefreshToken, {
+                httpOnly: true,
+                secure: false, // Set `true` if using HTTPS
+                path: "/",
+                sameSite: "strict",
+            });
+
+            res.status(200).json({ accessToken: newAccessToken });
+        });
+    },
+    //LOG OUT
+    userLogout: async (req, res) => {
+        res.clearCookie("refreshToken");
+        refreshTokens = refreshTokens.filter(token => token !== req.cookies.refreshToken);
+        res.status(200).json("Logged out !");
+    }
+
 };
 
-// Đăng ký người dùng mới
-export async function signup(req, res) {
-  try {
-    const { username, email, password } = req.body;
-
-    // Kiểm tra đầu vào
-    const errors = validateSignupInput(req.body);
-    if (errors.length > 0) {
-      return res.status(400).json({ success: false, errors });
-    }
-
-    // Kiểm tra email hoặc username đã tồn tại chưa
-    const existingUser = await User.findOne({
-      $or: [{ email }, { username }],
-    });
-
-    if (existingUser) {
-      return res.status(400).json({
-        success: false,
-        message: "Email or username already exists",
-      });
-    }
-
-    // Hash mật khẩu
-    const salt = await bcryptjs.genSalt(10);
-    const hashedPassword = await bcryptjs.hash(password, salt);
-
-    // Tạo người dùng mới
-    const PROFILE_PICS = ["/avatar1.png", "/avatar2.png", "/avatar3.png"];
-    const image = PROFILE_PICS[Math.floor(Math.random() * PROFILE_PICS.length)];
-
-    const newUser = await User.create({
-      username,
-      email,
-      password: hashedPassword,
-      image,
-    });
-
-    // Tạo token và đặt cookie
-    generateTokenandsetcookie(newUser._id, res);
-
-    res.status(201).json({
-      success: true,
-      user: { ...newUser._doc, password: "" },
-    });
-  } catch (error) {
-    console.error("Error on signup", error.message);
-    res.status(500).json({ success: false, message: "Internal Server Error" });
-  }
-}
-
-// Đăng nhập người dùng
-export async function login(req, res) {
-  try { // Lấy email và password từ body
-    const { email, password } = req.body;
-
-    // Kiểm tra email và password
-    if (!email || !password) {
-      return res
-        .status(400)
-        .json({ success: false, message: "All fields are required" });
-    }
-
-    const user = await User.findOne({ email });
-    if (!user) {
-      return res
-        .status(400)
-        .json({ success: false, message: "Invalid email or password" });
-    }
-
-    const isPasswordValid = await bcryptjs.compare(password, user.password);
-    if (!isPasswordValid) {
-      return res
-        .status(400)
-        .json({ success: false, message: "Invalid email or password" });
-    }
-
-    generateTokenandsetcookie(user._id, res);
-
-    res.status(200).json({
-      success: true,
-      user: { ...user._doc, password: "" },
-    });
-  } catch (error) {
-    console.error("Error on login", error.message);
-    res.status(500).json({ success: false, message: "Internal Server Error" });
-  }
-}
-
-// Đăng xuất người dùng
-export async function logout(req, res) {
-  try {
-    // xoa cookiecua jwt
-    res.clearCookie("jwt-netflix", {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: "strict",
-    });
-
-    res.status(200).json({ success: true, message: "Logged out successfully" });
-  } catch (error) {
-    console.error("Error on logout", error.message);
-    res.status(500).json({ success: false, message: "Internal Server Error" });
-  }
-}
+export default authController;

@@ -1,13 +1,15 @@
 import express from "express";
-import { signup, login, logout } from "../controllers/auth.controller.js";
+import authController from "../controllers/auth.controller.js";
+import middlewareController from "../controllers/middleware.controller.js";
 
 const router = express.Router();
 
-// chuc nang dang ky
-router.post("/signup", signup);
-// chuc nang dang nhap 
-router.post("/login", login);
-// chuc nang dang xuatxuat
-router.post("/logout", logout);
-
+//REGISTER
+router.post("/register", authController.registerUser);
+//LOGIN
+router.post("/login", authController.loginUser);
+//refresh
+router.post("/refresh", authController.requestRefreshToken);
+//loout
+router.post("/logout",middlewareController.verifyToken,authController.userLogout);
 export default router;

@@ -1,39 +1,33 @@
 import mongoose from "mongoose";
 
-const userSchema = new mongoose.Schema({
-  username: {
-    type: String,
-    required: true,
-    unique: true,
-    trim: true, // Loại bỏ khoảng trắng thừa
+const userSchema = new mongoose.Schema(
+  {
+    username: {
+      type: String,
+      required: true,
+      minlength: 6,
+      maxlength: 20,
+      unique: true,
+    },
+    email: {
+      type: String,
+      required: true,
+      maxlength: 50,
+      unique: true,
+    },
+    password: {
+      type: String,
+      required: true,
+      minlength: 6,
+    },
+    admin: {
+      type: Boolean,
+      default: false,
+    },
   },
-  email: {
-    type: String,
-    required: true,
-    unique: true,
-    trim: true,
-  },
-  password: {
-    type: String,
-    required: true,
-  },
-  image: {
-    type: String,
-    default: "", // Ảnh đại diện
-  },
-  role: {
-    type: String,
-    enum: ["customer", "admin"], // Chỉ cho phép 2 giá trị: 'customer' hoặc 'admin'
-    default: "customer", // Mặc định là khách hàng
-  },
-  searchHistory: {
-    type: [String], // Lịch sử tìm kiếm (mảng các chuỗi)
-    default: [],
-  },
-  createdAt: {
-    type: Date,
-    default: Date.now, // Thời gian tạo
-  },
-});
+  { timestamps: true }
+);
 
-export const User = mongoose.model("User", userSchema);
+const User = mongoose.model("User", userSchema);
+
+export default User;
